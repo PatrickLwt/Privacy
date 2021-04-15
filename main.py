@@ -7,27 +7,32 @@ import noise_gen_wrapper as ngw
 import generate_argparse as ga
 import data_generator as dg 
 import special_printer as sp 
-from network import VGG16, LeNet
+from network import VGG16, LeNet, AlexNet
 
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPool2D, Input, BatchNormalization, Dropout, Activation
 from tensorflow.keras import Model, regularizers, Sequential
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 PARAMS = {
-    'mnist':{'noise_type': 'Unperturbed', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 1.0,
+    'mnist':{'noise_type': 'Optimized_Normal', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 1.0,
             'train_epochs': 60, 'batch_size': 128, 'lot_size': 128, 'total_num_examples': 60000, 'load_model': False,
             'load_path': 'pretrain_model/pretrained_lenet.h5',
             'net_name': 'LeNet', 'augmentation': False, 'init_lr': 0.1, 'lr_decay_step': 215, 'lr_decay_rate': 0.99,},
-    'cifar-10':{'noise_type': 'Gaussian', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 5.0,
+    'cifar-10':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 5.0,
             'train_epochs': 60, 'batch_size': 64, 'lot_size': 256, 'total_num_examples': 50000, 'load_model': True,
             'load_path': 'pretrain_model/pretrained_vgg16.h5',
-            'net_name': 'VGG16', 'augmentation': True, 'init_lr': 0.1, 'lr_decay_step': 4000, 'lr_decay_rate': 0.5}
+            'net_name': 'VGG16', 'augmentation': True, 'init_lr': 0.1, 'lr_decay_step': 4000, 'lr_decay_rate': 0.5},
+    'svhn':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 5.0,
+            'train_epochs': 60, 'batch_size': 64, 'lot_size': 256, 'total_num_examples': 73257, 'load_model': False,
+            'load_path': 'pretrain_model/pretrained_alexnet.h5',
+            'net_name': 'AlexNet', 'augmentation': False, 'init_lr': 0.1, 'lr_decay_step': 733, 'lr_decay_rate': 0.99,}
 }
 
-dataset_name = 'mnist'
+dataset_name = 'svhn'
+
 net_info = {
     'dataset': dataset_name,  # 'mnist', 'cifar-10'
-    'noise_type': PARAMS[dataset_name]['noise_type'],  # Gaussian, UDN, Optimized, 
+    'noise_type': PARAMS[dataset_name]['noise_type'],  # Gaussian, UDN, Optimized_Special, Optimized_Normal, MVG
     'epsilon': PARAMS[dataset_name]['epsilon'],
     'delta': PARAMS[dataset_name]['delta'],
     'clip_value': PARAMS[dataset_name]['clip_value'],  # Clip by global norm
@@ -157,7 +162,6 @@ class TestCallback(tf.keras.callbacks.Callback):
 
 def main(net_info):
     x_train, y_train, x_test, y_test = dg.get_data(net_info)
-    ### for cifar
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(net_info['init_lr'], net_info['lr_decay_step'], net_info['lr_decay_rate'], staircase=True)
     optimizer = tf.keras.optimizers.SGD(learning_rate=lr_schedule, momentum=0.9, nesterov=True)
     loss_custom = tf.keras.losses.CategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)

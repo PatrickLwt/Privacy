@@ -6,23 +6,26 @@ def generalized_harmonic_number(order, exponent=1):
     i = tf.constant(1)
     while_condition = lambda i, sum: tf.less(i, order+1)
     def body(i, sum):
-        sum = sum + (1.0 / (tf.to_float(i) ** exponent))
+        sum = sum + (1.0 / (tf.cast(i, dtype=tf.float32) ** exponent))
         return [tf.add(i, 1), sum]
 
     r, sum2 = tf.while_loop(while_condition, body, [i, sum])
         
     return sum2
 
-def mvg_sampler(wsigma, ssigma, m, n):
-    noise = tf.random_normal([m,n])
-    ssigma = tf.reshape(ssigma, [ssigma.shape[0]])
-    # ssigma = tf.Print(ssigma, [ssigma], message="This is ssigma: ")
-    b_sigma = tf.matmul(wsigma, tf.diag(tf.sqrt(ssigma)))
-    Z = tf.matmul(b_sigma, noise)
+def mvg_sampler(ssigma, query_shape):
+    noise = tf.random.normal(query_shape)
+    b_sigma = ssigma * tf.eye(query_shape[0])
+    try:
+        Z = tf.linalg.matmul(b_sigma, noise)
+    except:
+        Z = tf.linalg.matmul(b_sigma, tf.reshape(noise, (query_shape[0], -1)))
+        # Z = tf.squeeze(Z, axis=-1)
+        Z = tf.reshape(Z, query_shape)
     return Z
 
 def calculateBound(m, n, l2_sensitivity, epsilon, delta):
-    zeta = tf.sqrt(2 * tf.sqrt(- m * n * tf.log(delta)) - 2 * tf.log(delta) + m * n)
+    zeta = tf.sqrt(2 * tf.sqrt(- m * n * tf.math.log(delta)) - 2 * tf.math.log(delta) + m * n)
     gamma = l2_sensitivity / 2.0
     r = tf.minimum(m, n)
     r = tf.cast(r, tf.int32)
@@ -42,18 +45,43 @@ def getTheta(wsigma):
     return theta
 
 
-def getNoise(grads, epsilon, delta, l2_sensitivity, wsigma):
+def getNoise(grads, epsilon, delta, l2_sensitivity):
     query_shape = grads.get_shape().as_list()
-    m, n = query_shape
+    # print(query_shape)
+    try:
+        m, n = query_shape[0], query_shape[1]
+    except:
+        m = query_shape[0]
+        n = 1
+
     bound = calculateBound(m, n, l2_sensitivity, epsilon, delta)
     budget = bound * bound / n
-    theta = getTheta(wsigma)
+    # theta = getTheta(wsigma)
+    # p = theta * budget
+    # not_equal = tf.not_equal(p, 0)
+    # replace = tf.ones_like(p)/1000000
+    # p2 = tf.where(not_equal, p, replace)
+    # sigma = 1 / tf.sqrt(p2)
+    directional = False
+    directional_tao = 0.8
+    theta = np.ones(m)
+    if directional:
+        if m > 2:
+            for i in range(m):
+                theta[i] = (1 - directional_tao) / (m-2)
+            theta[0] = directional_tao / 2
+            theta[1] = directional_tao / 2
+        else:
+            if m == 1:
+                theta[0] = directional_tao
+            else:
+                theta[0] = directional_tao / 2
+                theta[1] = directional_tao / 2
+    else:
+        theta = theta / m  
     p = theta * budget
-    not_equal = tf.not_equal(p, 0)
-    replace = tf.ones_like(p)/1000000
-    p2 = tf.where(not_equal, p, replace)
-    sigma = 1 / tf.sqrt(p2)
-    noise = mvg_sampler(wsigma, sigma, m, n)
+    sigma = 1 / tf.sqrt(p)
+    noise = mvg_sampler(sigma, query_shape)
     return noise
 
 def getNoisebias(grads, epsilon, delta, l2_sensitivity):
@@ -67,3 +95,6 @@ def getNoisebias(grads, epsilon, delta, l2_sensitivity):
     noise = noise * tf.sqrt(sigma)
     return noise
 
+# grads = tf.ones((5,3,4,5))
+# noise = getNoise(grads, 1, 1e-5, 1)
+# print(noise.shape)

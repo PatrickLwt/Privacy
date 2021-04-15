@@ -131,8 +131,7 @@ class VGG16(Model):
     def build_model(self):
         x = Input(shape=(32, 32, 3))
         model = Model(inputs=[x], outputs=self.call(x))
-        self.accumulated_grads = [tf.Variable(tf.zeros_like(
-            var), trainable=False) for var in self.trainable_variables]
+        self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
         return model
 
 
@@ -172,3 +171,57 @@ class LeNet(Model):
         self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
         return model 
 
+class AlexNet(Model):
+    def __init__(self):
+        super(AlexNet, self).__init__()
+        self.weight_decay = 0.0005
+
+        self.conv1 = Conv2D(64, 3, activation='relu', padding='same', input_shape=[32, 32, 3],
+                            kernel_regularizer=regularizers.l2(self.weight_decay), name='conv1')
+        self.bn1 = BatchNormalization()
+        self.pool1 = MaxPool2D(pool_size=(2, 2))
+
+        self.conv2 = Conv2D(192, 3, activation='relu', padding='same', kernel_regularizer=regularizers.l2(self.weight_decay), name='conv2')
+        self.bn2 = BatchNormalization()
+        self.pool2 = MaxPool2D(pool_size=(2, 2))
+
+        self.conv3 = Conv2D(384, 3, activation='relu', padding='same', kernel_regularizer=regularizers.l2(self.weight_decay), name='conv3')
+        self.bn3 = BatchNormalization()
+        self.conv4 = Conv2D(256, 3, activation='relu', padding='same', kernel_regularizer=regularizers.l2(self.weight_decay), name='conv4')
+        self.bn4 = BatchNormalization()
+        self.conv5 = Conv2D(256, 3, activation='relu', padding='same', kernel_regularizer=regularizers.l2(self.weight_decay), name='conv5')
+        self.bn5 = BatchNormalization()
+        self.pool3 =MaxPool2D(pool_size=(2, 2))
+
+        self.flatten = Flatten()
+        self.d1 = Dense(512, activation='relu', kernel_regularizer=regularizers.l2(self.weight_decay), name='fc1')
+        self.bn6 = BatchNormalization()
+        self.drop1 = Dropout(0.5)
+        self.d2 = Dense(10, activation='softmax', name='fc2')
+
+    def call(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.pool1(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.pool2(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.conv4(x)
+        x = self.bn4(x)
+        x = self.conv5(x)
+        x = self.bn5(x)
+        x = self.pool3(x)
+        x = self.flatten(x)
+        x = self.d1(x)
+        x = self.bn6(x)
+        x = self.drop1(x)
+        x = self.d2(x)
+        return x
+
+    def build_model(self):
+        x = Input(shape=(32, 32, 3))
+        model = Model(inputs=[x], outputs=self.call(x))
+        self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
+        return model
