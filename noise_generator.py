@@ -17,6 +17,7 @@ import noise_utils.mvgnoise_generator as mvg
 import noise_utils.imgm_bound as gb 
 import noise_utils.optver2_noise_gen as opt2
 import noise_utils.optver3_noise_gen as opt3
+from noise_utils.cal_aplus import getAplus
 # for sig=6
 # eps20 -> 0.72
 # eps60 -> 1.24
@@ -186,6 +187,8 @@ class MMMechanism(object):
         self._epsilon = epsilon
         self._delta = delta
 
+        self._batch_size = batch_size
+
         # input sampling rate q
         self._sample_rate_q = batch_size / total_num_examples
 
@@ -201,8 +204,16 @@ class MMMechanism(object):
         # delta value for each iteration
         self._delta_per_iter = self._delta / (2 * self._noise_iter)
 
+        # Get Aplus, frankly speaking we should generate aplus according to m,
+        # but it is so slow.So here we use the hard coding specificly serving
+        # our FCNet model, if applying to other networks, it should be adjusted.
+        # You should generate aplus in generate_noise function
+        # use aplus = tf.cast(getAplus(m))
+        self.aplus1 = tf.cast(getAplus(105), tf.float32)   ### Corresponding to the input dim, for Adult dataset, input dim = 105
+        self.aplus2 = tf.cast(getAplus(12), tf.float32)   ### Corresponding to the middle dim, for this network, midlle dim =12
 
-    def generate_noise(self, grad, aplus):
+
+    def generate_noise(self, grad):
         try:
             m , n =grad.get_shape().as_list()
         except:
@@ -210,15 +221,20 @@ class MMMechanism(object):
             n = 1
         self._eps_per_iter = self._epsilon / (m  * n) / (2.0 * self._sample_rate_q) / 2.0 /\
                              np.sqrt(self._noise_iter * np.log(np.e + self._epsilon / self._delta))
-        sigma = gb.calculate_gaussian_noise_stddev(self._eps_per_iter, self._delta_per_iter, self._clip_value, 1, 1)
-        sp.info(sp.var_print('sigma_old', sigma))
-        a = np.linalg.pinv(aplus)
-        w = np.ones((1, self._batch_size))
-        b = np.ones((self._batch_size, 1)) * sigma * np.norm(a, 2)
-        sigma_mm = np.matmul(np.matmul(w, aplus), b)
-        sp.info(sp.var_print('sigma_old', sigma_mm))
+        l2_sen = self._clip_value * np.sqrt(m*n)
+        sigma = l2_sen / self._eps_per_iter * np.sqrt(2*np.log(1.25/self._delta_per_iter))
+        noise = tf.random.normal(grad.get_shape(), 0.0, sigma)
 
-        noise = tf.random_normal(grad.get_shape(), 0.0, sigma_mm)
+        if m==105:
+            aplus = self.aplus1
+        elif m==12:
+            aplus = self.aplus2
+
+        try: ### for weight
+            noise = tf.linalg.matmul(aplus, noise)
+        except: ### for bias shape is [m]
+            pass
+        
         return noise
 
 
@@ -301,10 +317,17 @@ class OptimizedVer3Mechanism(object):
     # return noise --- tensor, the same shape as grad
 
     def generate_noise(self, grad):
+        ## changed clip value
+        shape = grad.get_shape().as_list()
+        shape_mul = 1
+        if len(shape) != 0:
+            for i in range(len(shape)):
+                shape_mul = shape_mul * shape[i]
+        l2_sen = self._clip_value * np.sqrt(shape_mul)
         # flatten the gradients
         grad_array = tf.reshape(grad, [-1])
         sigma_array = opt3.generate_noise(grad_array,
-                                    tf.constant(self._clip_value, dtype=tf.float32),
+                                    tf.constant(l2_sen, dtype=tf.float32),
                                     tf.constant(self._epsilon_wc, dtype=tf.float32),
                                     tf.constant(self._delta_wc, dtype=tf.float32),
                                     tf.constant(self._noise_iter, dtype=tf.float32))

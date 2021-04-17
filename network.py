@@ -225,3 +225,22 @@ class AlexNet(Model):
         model = Model(inputs=[x], outputs=self.call(x))
         self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
         return model
+
+
+
+class FCNet(Model):
+    def __init__(self):
+        super(FCNet, self).__init__()
+        self.d1 = Dense(12, activation='sigmoid', name='fc1')
+        self.d2 = Dense(2, activation='sigmoid', name='fc2')
+
+    def call(self, x):
+        x = self.d1(x)
+        x = self.d2(x)
+        return x
+
+    def build_model(self):
+        x = Input(shape=(1,105))
+        model = Model(inputs=[x], outputs=self.call(x))
+        self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
+        return model 
