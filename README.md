@@ -39,3 +39,8 @@ The `noise_gen_wrapper.py`, `noise_generator.py` and `noise_utils\.` belong to n
 The most important file is `main.py`(`main_clip_new` differs only in the way of clipping).
 
 Users can custom the parameters in `net_info`. We custom the training process based on the model.fit of keras and custom the feedbacks. We calculate per example gradients and accelerate the operation using the vectorized way in TF2. We achieve the accumulating gradients operation(update the model a lot, several batches) since the per example gradients occupy the memory and this operation can solve the OOM errors.
+
+Run the code with 
+~~~python
+python main.py --epsilon=10.0 --noise_type='IDN'
+~~~
