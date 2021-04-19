@@ -18,6 +18,7 @@ import noise_utils.imgm_bound as gb
 import noise_utils.optver2_noise_gen as opt2
 import noise_utils.optver3_noise_gen as opt3
 from noise_utils.cal_aplus import getAplus
+from scipy import optimize
 # for sig=6
 # eps20 -> 0.72
 # eps60 -> 1.24
@@ -51,7 +52,7 @@ class GaussianMechanism(object):
         self._sample_rate_q = lot_size / total_num_examples
 
         # total number of noise addition iterations
-        self._noise_iter = int(total_epochs * total_num_examples / batch_size)
+        self._noise_iter = int(total_epochs * total_num_examples / lot_size)
 
         # clip value per example
         self._clip_value = l2_clip_value
@@ -90,7 +91,7 @@ class IMGMechanism(object):
         self._sample_rate_q = lot_size / total_num_examples
 
         # total number of noise addition iterations
-        self._noise_iter = int(total_epochs * total_num_examples / batch_size)
+        self._noise_iter = int(total_epochs * total_num_examples / lot_size)
 
         # clip value per example
         # self._clip_value = l2_clip_value / lot_size
@@ -126,7 +127,7 @@ class UDNMechanism(object):
         self._epsilon = epsilon
         self._delta = delta
 
-        self._sample_rate_q = batch_size / total_num_examples
+        self._sample_rate_q = lot_size / total_num_examples
 
         self._noise_iter = int(total_epochs * total_num_examples / lot_size)
 
@@ -151,6 +152,65 @@ class UDNMechanism(object):
 
         return noise
 
+class IDNMechanism(object):
+    def __init__(self, epsilon=_epsilon, delta=_delta, batch_size=_batch_size,
+                 l2_clip_value=_l2_clip_value, lot_size=_lot_size,
+                 total_num_examples=_total_num_examples, total_epochs=_total_epochs):
+        assert epsilon > 0, "Epsilon should be larger than 0."
+        assert delta > 0, "Delta should be larger than 0."
+        self._epsilon = epsilon
+        self._delta = delta
+
+        self._sample_rate_q = lot_size / total_num_examples
+
+        self._noise_iter = int(total_epochs * total_num_examples / lot_size)
+
+        def calculate_eps_per(eps_total, delta=1e-6):
+
+            def f1(epsilon):
+                eps = (np.exp(epsilon) - 1) * epsilon * self._noise_iter / (np.exp(epsilon) + 1) + epsilon * np.sqrt(2 * self._noise_iter * np.log(np.e + np.sqrt(self._noise_iter) * epsilon / delta))
+                return eps-eps_total
+
+            def f2(epsilon):
+                eps = (np.exp(epsilon) - 1) * epsilon * self._noise_iter / (np.exp(epsilon) + 1) + epsilon * np.sqrt(2 * self._noise_iter * np.log(1 / delta))
+                return eps-eps_total
+            eps1 = optimize.root_scalar(f1, bracket=[0, 10], method='brentq').root
+            eps2 = optimize.root_scalar(f2, bracket=[0, 10], method='brentq').root
+
+            return np.maximum(eps1, eps2)
+
+        # a = self._noise_iter * self._epsilon
+        # b = (np.exp(self._epsilon) - 1) * a / (np.exp(self._epsilon) + 1) + self._epsilon * np.sqrt(2 * self._noise_iter * np.log(np.e + np.sqrt(self._noise_iter) * self._epsilon / self._delta))
+        # c = (np.exp(self._epsilon) - 1) * a / (np.exp(self._epsilon) + 1) + self._epsilon * np.sqrt(2 * self._noise_iter * np.log(1 / self._delta))
+        # self._eps_per_iter = np.minimum(a, np.minimum(b, c))
+        # self._eps_per_iter = self._epsilon / (self._sample_rate_q) / 2.0 /\
+        #                      np.sqrt(self._noise_iter * np.log(np.e + self._epsilon / self._delta))
+        self._eps_per_iter = calculate_eps_per(self._epsilon) / self._sample_rate_q
+        # self._delta_per_iter = self._delta / (2 * self._noise_iter * self._sample_rate_q)
+        self._delta_per_iter = (1 - ((1 - self._delta) / (1 - 1e-6))**(1/self._noise_iter)) / self._sample_rate_q
+
+        self._clip_value = l2_clip_value 
+
+        sp.info('IDN Noise Mechanism')
+        sp.info(sp.var_print('epsilon', self._epsilon) +
+                sp.var_print('delta', self._delta) +
+                sp.var_print('sample_rate', self._sample_rate_q, 3) +
+                sp.var_print('eps_per_iter', self._eps_per_iter) +
+                sp.var_print('delta_per_iter', self._delta_per_iter)
+                )
+
+    def generate_noise(self, grad):
+        shape = grad.get_shape().as_list()
+        shape_mul = 1
+        if len(shape)!=0:
+            for i in range(len(shape)):
+                shape_mul = shape_mul * shape[i]
+        l2_sen = self._clip_value * np.sqrt(shape_mul)
+        noise = udn.getIDNNoise(grad, l2_sen, self._eps_per_iter , self._delta_per_iter)
+        
+        return noise
+
+
 class MVGMechanism(object):
     def __init__(self, epsilon=_epsilon, delta=_delta, batch_size=_batch_size,
                  l2_clip_value=_l2_clip_value, lot_size=_lot_size,
@@ -160,7 +220,7 @@ class MVGMechanism(object):
         self._epsilon = epsilon
         self._delta = delta
 
-        self._sample_rate_q = batch_size / total_num_examples
+        self._sample_rate_q = lot_size / total_num_examples
 
         self._noise_iter = int(total_epochs * total_num_examples / lot_size)
 
@@ -190,7 +250,7 @@ class MMMechanism(object):
         self._batch_size = batch_size
 
         # input sampling rate q
-        self._sample_rate_q = batch_size / total_num_examples
+        self._sample_rate_q = lot_size / total_num_examples
 
         # total number of noise addition iterations
         self._noise_iter = int(total_epochs * total_num_examples / lot_size)
@@ -286,7 +346,7 @@ class OptimizedVer3Mechanism(object):
         self._sample_rate_q = lot_size / total_num_examples
 
         # total number of noise addition iterations
-        self._noise_iter = int(total_epochs * total_num_examples / batch_size)
+        self._noise_iter = int(total_epochs * total_num_examples / lot_size)
 
         # clip value per example
         # self._clip_value = l2_clip_value / lot_size
@@ -348,7 +408,7 @@ class OptimizedVer2Mechanism(object):
         self._delta = delta
 
         # input sampling rate q
-        self._sample_rate_q = batch_size / total_num_examples
+        self._sample_rate_q = lot_size / total_num_examples
 
         # total number of noise addition iterations
         self._noise_iter = int(total_epochs * total_num_examples / lot_size)
