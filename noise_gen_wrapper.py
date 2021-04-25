@@ -44,7 +44,7 @@ def define_noiseGen(net_info):
                                         l2_clip_value=net_info['clip_value'],
                                         total_num_examples = net_info['total_num_examples'])
     elif net_info['noise_type'] == 'IDN':
-        noiseGen = ng.UDNMechanism(epsilon = net_info['epsilon'],
+        noiseGen = ng.IDNMechanism(epsilon = net_info['epsilon'],
                                         delta = net_info['delta'],
                                         total_epochs = net_info['train_epochs'],
                                         batch_size = net_info['batch_size'],

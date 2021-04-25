@@ -233,7 +233,13 @@ class MVGMechanism(object):
 
 
     def generate_noise(self, grad):
-        noise = mvg.getNoise(grad, self._eps_per_iter, self._delta_per_iter, self._clip_value)
+        shape = grad.get_shape().as_list()
+        shape_mul = 1
+        if len(shape)!=0:
+            for i in range(len(shape)):
+                shape_mul = shape_mul * shape[i]
+        l2_sen = self._clip_value * np.sqrt(shape_mul)
+        noise = mvg.getNoise(grad, self._eps_per_iter, self._delta_per_iter, l2_sen)
         return noise
 
 
