@@ -132,6 +132,7 @@ class VGG16(Model):
         x = Input(shape=(32, 32, 3))
         model = Model(inputs=[x], outputs=self.call(x))
         self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
+        self.sens_tensor = [tf.Variable(tf.ones_like(var), trainable=False) for var in self.trainable_variables]
         return model
 
 
@@ -169,6 +170,7 @@ class LeNet(Model):
         x = Input(shape=(28, 28, 1))
         model = Model(inputs=[x], outputs=self.call(x))
         self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
+        self.sens_tensor = [tf.Variable(tf.ones_like(var), trainable=False) for var in self.trainable_variables]
         return model 
 
 class AlexNet(Model):
@@ -224,6 +226,7 @@ class AlexNet(Model):
         x = Input(shape=(32, 32, 3))
         model = Model(inputs=[x], outputs=self.call(x))
         self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
+        self.sens_tensor = [tf.Variable(tf.ones_like(var), trainable=False) for var in self.trainable_variables]
         return model
 
 
@@ -243,4 +246,5 @@ class FCNet(Model):
         x = Input(shape=(1,105))
         model = Model(inputs=[x], outputs=self.call(x))
         self.accumulated_grads = [tf.Variable(tf.zeros_like(var), trainable=False) for var in self.trainable_variables]
+        self.sens_tensor = [tf.Variable(tf.ones_like(var), trainable=False) for var in self.trainable_variables]
         return model 

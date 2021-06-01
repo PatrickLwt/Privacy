@@ -76,8 +76,8 @@ def define_noiseGen(net_info):
                                         l2_clip_value=net_info['clip_value'],
                                         total_num_examples = net_info['total_num_examples'])
     elif net_info['noise_type'] == 'Optimized_Normal':
-        noiseGen = ng.OptimizedVer2Mechanism(epsilon = net_info['epsilon'],
-                                        delta = net_info['delta'],
+        noiseGen = ng.OptimizedVer2Mechanism(epsilon = net_info['epsilon'] * (1-net_info['partial_sens']),
+                                        delta = net_info['delta'] * (1-net_info['partial_sens']),
                                         total_epochs = net_info['train_epochs'],
                                         batch_size = net_info['batch_size'],
                                         lot_size=net_info['lot_size'],

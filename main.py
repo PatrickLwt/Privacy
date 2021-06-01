@@ -7,6 +7,7 @@ import noise_gen_wrapper as ngw
 import generate_argparse as ga
 import data_generator as dg 
 import special_printer as sp 
+import noise_utils.optver3_noise_gen as opt3
 from network import VGG16, LeNet, AlexNet, FCNet
 
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPool2D, Input, BatchNormalization, Dropout, Activation
@@ -14,21 +15,21 @@ from tensorflow.keras import Model, regularizers, Sequential
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 PARAMS = {
-    'mnist':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 0.0001,
+    'mnist':{'noise_type': 'Optimized_Normal', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 0.0001,
             'train_epochs': 60, 'batch_size': 128, 'lot_size': 128, 'total_num_examples': 60000, 'load_model': False,
-            'load_path': 'pretrain_model/pretrained_lenet.h5', 'log_name': 'training.log',
+            'load_path': 'pretrain_model/pretrained_lenet.h5', 'log_name': 'training.log', 'partial_sens': 1/32,
             'net_name': 'LeNet', 'augmentation': False, 'init_lr': 0.1, 'lr_decay_step': 215, 'lr_decay_rate': 0.99},
     'cifar-10':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 5.0,
             'train_epochs': 60, 'batch_size': 64, 'lot_size': 256, 'total_num_examples': 50000, 'load_model': True,
-            'load_path': 'pretrain_model/pretrained_vgg16.h5', 'log_name': 'training.log',
+            'load_path': 'pretrain_model/pretrained_vgg16.h5', 'log_name': 'training.log', 'partial_sens': 1/32,
             'net_name': 'VGG16', 'augmentation': True, 'init_lr': 0.1, 'lr_decay_step': 4000, 'lr_decay_rate': 0.5},
     'svhn':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 5.0,
             'train_epochs': 60, 'batch_size': 64, 'lot_size': 256, 'total_num_examples': 73257, 'load_model': False,
-            'load_path': 'pretrain_model/pretrained_alexnet.h5', 'log_name': 'training.log',
+            'load_path': 'pretrain_model/pretrained_alexnet.h5', 'log_name': 'training.log', 'partial_sens': 1/32,
             'net_name': 'AlexNet', 'augmentation': False, 'init_lr': 0.1, 'lr_decay_step': 733, 'lr_decay_rate': 0.99},
     'adult':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 1.0,
             'train_epochs': 60, 'batch_size': 256, 'lot_size': 256, 'total_num_examples': 32561, 'load_model': False,
-            'load_path': 'pretrain_model/pretrained_adult.h5', 'log_name': 'training.log',
+            'load_path': 'pretrain_model/pretrained_adult.h5', 'log_name': 'training.log', 'partial_sens': 1/32,
             'net_name': 'FCNet', 'augmentation': False, 'init_lr': 0.1, 'lr_decay_step': 215, 'lr_decay_rate': 0.99}
 }
 
@@ -51,7 +52,8 @@ net_info = {
     'augmentation': PARAMS[dataset_name]['augmentation'],  # Whether to do data augmentation
     'init_lr': PARAMS[dataset_name]['init_lr'],
     'lr_decay_step': PARAMS[dataset_name]['lr_decay_step'],
-    'lr_decay_rate': PARAMS[dataset_name]['lr_decay_rate']
+    'lr_decay_rate': PARAMS[dataset_name]['lr_decay_rate'],
+    'partial_sens': PARAMS[dataset_name]['partial_sens']
 }
 
 ga.generate_then_parse_arguments(net_info)
@@ -80,6 +82,15 @@ class OurModel(globals()[net_info['net_name']]):
         self.batch_per_lot = int(net_info['lot_size'] / net_info['batch_size'])
         self.noise_gen = ngw.define_noiseGen(net_info)
         self.apply_flag = tf.Variable(False, dtype=tf.bool, trainable=False)
+        self.sens_flag = tf.Variable(False, dtype=tf.bool, trainable=False)
+
+        if net_info['noise_type'] == 'Optimized_Normal':
+            self.do_sens = True
+            # the epsilon, delta, and iteration for sens_tensor's noise
+            self.info = (net_info['partial_sens'] * net_info['epsilon'], net_info['partial_sens'] * net_info['delta'],
+                         int(net_info['train_epochs'] * net_info['total_num_examples'] / (5*net_info['lot_size'])))
+        else:
+            self.do_sens = False
 
 
     # def special_compile(self, custom_optimizer, custom_loss, custom_metric):
@@ -110,6 +121,33 @@ class OurModel(globals()[net_info['net_name']]):
 
         return tf.truediv(noised_gradient, self.batch_size)
 
+    def reduce_noise_normalize_batch_sens(self, grad, sens):
+        noised_gradient = []
+        for i in range(len(grad)):
+            summed_gradient = tf.reduce_mean(grad[i], axis=0)
+            noise = self.noise_gen.generate_noise(sens[i])
+            noised_grad = tf.add(summed_gradient, noise)
+            noised_gradient.append(noised_grad)
+
+        return noised_gradient
+
+    def update_sens(self, jacobian, info):
+        grads = [tf.reduce_mean(g, axis=0) for g in jacobian]
+        epsilon, delta, iteration = info
+        eps_per_iter = epsilon / tf.math.sqrt(4 * iteration * tf.math.log(np.e + epsilon/delta))
+        delta_per_iter = delta / (2 * iteration)
+
+        def add_optimized_noise(g):
+            clip_value = tf.norm(g)
+            noise_on_sens = opt3.generate_noise(g, clip_value, eps_per_iter, delta_per_iter, iteration)
+            noised_sens = tf.add(g, noise_on_sens)
+            return noised_sens
+
+        sens_tensor = tf.nest.map_structure(add_optimized_noise, grads)
+        return sens_tensor
+
+    def keep_sens(self, jacobian):
+        return [tf.reduce_mean(g, axis=0) for g in jacobian]
 
     def apply(self):
         gradients = [g / self.batch_per_lot for g in self.accumulated_grads]
@@ -132,13 +170,28 @@ class OurModel(globals()[net_info['net_name']]):
 
         jacobian = tape.jacobian(loss, self.trainable_variables)
 
+
+        # the yes&no function is redundant actually, but I have to use them since if I directly input self.sense_tensor in self.keep_sens()
+        # an error occurs. Moreover, if I directly update self.sens_tensor=sens_tensor in self.update_sens(), another error occurs, so I have 
+        # to use this seemingly bad method to update the sens_tensor.
+        def yes(sens):
+            self.sens_tensor = sens
+            return
+
+        def no():
+            return
         ### Accelerating
         # clipped_gradients = tf.vectorized_map(
         #     lambda g: clip_gradients_vmap(g, self.clip_value), jacobian)
 
         # clipped_gradients = tf.map_fn(self.clip_gradients, jacobian)
         clipped_gradients = tf.vectorized_map(self.clip_gradients, jacobian)
-        noised_gradients = tf.nest.map_structure(self.reduce_noise_normalize_batch, clipped_gradients)
+        if self.do_sens:
+            sens_tensor = tf.cond(self.sens_flag, lambda: self.update_sens(jacobian, self.info), lambda: self.keep_sens(jacobian))
+            tf.cond(self.sens_flag, lambda: yes(sens_tensor), lambda: no())
+            noised_gradients = self.reduce_noise_normalize_batch_sens(clipped_gradients, self.sens_tensor)
+        else:
+            noised_gradients = tf.nest.map_structure(self.reduce_noise_normalize_batch, clipped_gradients)
 
         for g, new_grad in zip(self.accumulated_grads, noised_gradients):
             g.assign_add(new_grad)
@@ -174,6 +227,14 @@ class TestCallback(tf.keras.callbacks.Callback):
         else:
             self.model.apply_flag.assign(False)
     #     print('\nStep: {}, Apply Flag: {}\n'.format(batch, self.model.apply_flag))
+
+        # Update the sens-tensor every 5 lots using the latest gradients
+        if batch % (5*self.model.batch_per_lot) == 0:
+            self.model.sens_flag.assign(True)
+        else:
+            self.model.sens_flag.assign(False)
+
+        # print('\nStep: {}, Sens Flag: {}\n'.format(batch, self.model.sens_flag))
 
 
 def main(net_info):
