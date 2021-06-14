@@ -12,9 +12,9 @@ def get_alpha(clip_value, grad_array):
     return alpha
 
 
-## update the markov bound to (2epsilon+(2ln(delta))/t)/(1+t)
+## update the tau to (2epsilon + ( 2ln(delta) )/t )/ ( iter * (1+t) )
 def get_markov_bound(epsilon, delta, noise_iter):
-    t = (4 * tf.math.log(delta) - tf.math.sqrt(16*tf.math.log(delta)*(tf.math.log(delta)-epsilon))) / (-4 * epsilon)
+    t = (- tf.math.log(delta) + tf.math.sqrt(tf.math.log(delta)*(tf.math.log(delta)-epsilon))) / epsilon
     eps = tf.math.multiply(tf.constant(2.0), epsilon)
     lamd = tf.math.divide(tf.constant(2.0), t)
     lamd2 = tf.math.multiply(tf.add(tf.constant(1.0), t), noise_iter)
@@ -22,7 +22,6 @@ def get_markov_bound(epsilon, delta, noise_iter):
     markov_bound_raw = tf.add(eps, tf.math.multiply(lamd, det), name="y_bound")
     markov_bound = tf.math.divide(markov_bound_raw, lamd2)
     return markov_bound
-
 
 def generate_noise(grad_array, clip_value, epsilon, delta, noise_iter):
     # grad_array = tf.cast(grad_array, tf.float64)

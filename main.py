@@ -15,8 +15,9 @@ from tensorflow.keras import Model, regularizers, Sequential
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 PARAMS = {
-    'mnist':{'noise_type': 'Optimized_Normal', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 0.0001,
-            'train_epochs': 60, 'batch_size': 128, 'lot_size': 128, 'total_num_examples': 60000, 'load_model': False,
+    # clip value = 0.00001 for mnist clip_inf_norm, clip value = ? for mnist clip_global_norm
+    'mnist':{'noise_type': 'Optimized_Normal', 'epsilon': 1.0, 'delta': 0.00001, 'clip_value': 0.1,
+            'train_epochs': 60, 'batch_size': 64, 'lot_size': 512, 'total_num_examples': 60000, 'load_model': False,
             'load_path': 'pretrain_model/pretrained_lenet.h5', 'log_name': 'training.log', 'partial_sens': 1/32,
             'net_name': 'LeNet', 'augmentation': False, 'init_lr': 0.1, 'lr_decay_step': 215, 'lr_decay_rate': 0.99},
     'cifar-10':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 5.0,
@@ -105,23 +106,39 @@ class OurModel(globals()[net_info['net_name']]):
     #     raise NotImplementedError("Please use special_compile()")
 
     ### clip by global norm
-    # def clip_gradients(self, g):
-    #     return tf.clip_by_global_norm(g, self.clip_value)[0]
+    ### Weiting's implementation
+    '''def clip_gradients(self, g):
+        return tf.clip_by_global_norm(g, self.clip_value)[0]'''
+    ### Liyao's implementation
+    def clip_gradients_vmap(self, g, l2_norm_clip):
+        """Clips gradients in a way that is compatible with vectorized_map."""
+        grads_flat = tf.nest.flatten(g)
+        squared_l2_norms = [
+            tf.reduce_sum(input_tensor=tf.square(g)) for g in grads_flat
+        ]
+        global_norm = tf.sqrt(tf.add_n(squared_l2_norms))
+        div = tf.maximum(global_norm / l2_norm_clip, 1.)
+        clipped_flat = [g / div for g in grads_flat]
+        clipped_grads = tf.nest.pack_sequence_as(g, clipped_flat)
+
+        return clipped_grads
+
     ### clip by value
-    def clip_gradients(self, g):
+    '''def clip_gradients(self, g):
         grads_flat = tf.nest.flatten(g)
         clipped_flat = [tf.clip_by_value(g, clip_value_min=-self.clip_value, clip_value_max=self.clip_value) for g in grads_flat]
         clipped_grads = tf.nest.pack_sequence_as(g, clipped_flat)
-        return clipped_grads
+        return clipped_grads'''
 
     def reduce_noise_normalize_batch(self, g):
         summed_gradient = tf.reduce_sum(g, axis=0)
         noise = self.noise_gen.generate_noise(summed_gradient)
         noised_gradient = tf.add(summed_gradient, noise)
-
+        '''print("1111111 noised_gradient is ")
+        print(tf.norm(noised_gradient))'''
         return tf.truediv(noised_gradient, self.batch_size)
 
-    def reduce_noise_normalize_batch_sens(self, grad, sens):
+    '''def reduce_noise_normalize_batch_sens(self, grad, sens):
         noised_gradient = []
         for i in range(len(grad)):
             summed_gradient = tf.reduce_mean(grad[i], axis=0)
@@ -129,17 +146,26 @@ class OurModel(globals()[net_info['net_name']]):
             noised_grad = tf.add(summed_gradient, noise)
             noised_gradient.append(noised_grad)
 
-        return noised_gradient
+        return noised_gradient'''
+
+    ## Liyao's implementation
+    def reduce_noise_normalize_batch_sens(self, grad, sens):
+        summed_gradient = tf.reduce_mean(grad, axis=0)
+        noise = self.noise_gen.generate_noise(sens)
+        noised_gradient = tf.add(summed_gradient, noise)
+        '''print("2222222 noised_gradient is ")
+        print(tf.norm(noised_gradient))'''
+        return tf.truediv(noised_gradient, self.batch_size)
 
     def update_sens(self, jacobian, info):
         grads = [tf.reduce_mean(g, axis=0) for g in jacobian]
-        epsilon, delta, iteration = info
-        eps_per_iter = epsilon / tf.math.sqrt(4 * iteration * tf.math.log(np.e + epsilon/delta))
-        delta_per_iter = delta / (2 * iteration)
+        epsilon_w, delta_w, iteration_w = info
+        # eps_per_iter = epsilon / tf.math.sqrt(4 * iteration * tf.math.log(np.e + epsilon/delta))
+        # delta_per_iter = delta / (2 * iteration)
 
         def add_optimized_noise(g):
             clip_value = tf.norm(g)
-            noise_on_sens = opt3.generate_noise(g, clip_value, eps_per_iter, delta_per_iter, iteration)
+            noise_on_sens = opt3.generate_noise(g, clip_value, epsilon_w, delta_w, iteration_w)
             noised_sens = tf.add(g, noise_on_sens)
             return noised_sens
 
@@ -180,17 +206,20 @@ class OurModel(globals()[net_info['net_name']]):
 
         def no():
             return
-        ### Accelerating
-        # clipped_gradients = tf.vectorized_map(
-        #     lambda g: clip_gradients_vmap(g, self.clip_value), jacobian)
+        ### Liyao's implementation   Accelerating
+        clipped_gradients = tf.vectorized_map(
+            lambda g: self.clip_gradients_vmap(g, self.clip_value), jacobian)
 
         # clipped_gradients = tf.map_fn(self.clip_gradients, jacobian)
-        clipped_gradients = tf.vectorized_map(self.clip_gradients, jacobian)
+        # clipped_gradients = tf.vectorized_map(self.clip_gradients, jacobian) # running error
         if self.do_sens:
+            # compute w
             sens_tensor = tf.cond(self.sens_flag, lambda: self.update_sens(jacobian, self.info), lambda: self.keep_sens(jacobian))
             tf.cond(self.sens_flag, lambda: yes(sens_tensor), lambda: no())
-            noised_gradients = self.reduce_noise_normalize_batch_sens(clipped_gradients, self.sens_tensor)
+            noised_gradients = tf.nest.map_structure(self.reduce_noise_normalize_batch_sens, clipped_gradients, self.sens_tensor)
+            # noised_gradients = self.reduce_noise_normalize_batch_sens(clipped_gradients, self.sens_tensor)
         else:
+            # do not compute w
             noised_gradients = tf.nest.map_structure(self.reduce_noise_normalize_batch, clipped_gradients)
 
         for g, new_grad in zip(self.accumulated_grads, noised_gradients):

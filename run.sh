@@ -1,5 +1,5 @@
-noise=("MVG" "Optimized_Special" "IDN")
-epsilon=("15.0" "8.0" "3.0")
+noise=("Optimized_Special" "Gaussian") #   "Optimized_Normal" "Optimized_Special" "Gaussian"
+epsilon=("0.5" "1.0" "2.0" "5.0" "10.0" ) #"0.2" "0.5" "1.0" "2.0" "5.0" "10.0"
 for ((i=0;i<${#epsilon[@]};++i)); do
     epsilon_val=${epsilon[i]}
     epsilon_str="--epsilon=${epsilon_val}"
