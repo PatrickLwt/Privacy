@@ -369,7 +369,7 @@ class OptimizedVer3Mechanism(object):
         self._epsilon_wc = self._epsilon / self._sample_rate_q
         self._delta_wc = self._delta / self._sample_rate_q
 
-        sp.info('Optimized Noise Mechanism')
+        sp.info('Optimized Special Mechanism')
         sp.info(sp.var_print('epsilon', self._epsilon) +
                 sp.var_print('delta', self._delta) +
                 sp.var_print('clip', self._clip_value) +
@@ -402,59 +402,6 @@ class OptimizedVer3Mechanism(object):
         noise = tf.reshape(noise1, tf.shape(grad))
         return noise
 
-## Liyao's implementation of optimized
-class OptimizedVer2CompMechanism(object):
-    def __init__(self, epsilon=_epsilon, delta=_delta,
-                 l2_clip_value=_l2_clip_value, batch_size=_batch_size, lot_size=_lot_size,
-                 total_num_examples=_total_num_examples, total_epochs=_total_epochs):
-        assert epsilon > 0, "Epsilon should be larger than 0."
-        assert delta > 0, "Delta should be larger than 0."
-        self._epsilon = epsilon
-        self._delta = delta
-
-        # input sampling rate q
-        self._sample_rate_q = lot_size / total_num_examples
-
-        # total number of noise addition iterations
-        self._noise_iter = int(total_epochs * total_num_examples / lot_size)
-
-        # clip value per example
-        # self._clip_value = l2_clip_value / lot_size
-        self._clip_value = l2_clip_value
-
-        # without composition
-        self._epsilon_wc = self._epsilon / self._sample_rate_q
-        self._delta_wc = self._delta / self._sample_rate_q
-
-        sp.info('Optimized Noise Mechanism')
-        sp.info(sp.var_print('epsilon', self._epsilon) +
-                sp.var_print('delta', self._delta) +
-                sp.var_print('clip', self._clip_value) +
-                sp.var_print('sample_rate', self._sample_rate_q, 3)
-                )
-    # Return noise of the optimized mechanism to be added to the gradients.
-    # Usage: called each time of generating noise.
-    # parameters: grad --- tensor, gradients of a layer, does not need to be flattened.
-    # return noise --- tensor, the same shape as grad
-
-    def generate_noise(self, grad):
-
-        # flatten the gradients
-        grad_array = tf.reshape(grad, [-1])
-
-        # sigma_array, _ = nog2.generate_noise(grad_array,
-        #                             tf.constant(self._clip_value, dtype=tf.float32),
-        #                             tf.constant(self._eps_per_iter, dtype=tf.float32),
-        #                             tf.constant(self._delta_per_iter, dtype=tf.float32))
-        sigma_array, _ = opt2.generate_noise(grad_array,
-                                    tf.constant(self._clip_value, dtype=tf.float32),
-                                    tf.constant(self._epsilon_wc, dtype=tf.float32),
-                                    tf.constant(self._delta_wc, dtype=tf.float32),
-                                    tf.constant(self._noise_iter, dtype=tf.float32))
-        # sigma_array = tf.reshape(sigma_array, tf.shape(grad))
-        noise1 = tf.py_function(opt2.py_opt_noise, inp=[sigma_array], Tout=[tf.float32])
-        noise = tf.reshape(noise1, tf.shape(grad))
-        return noise
 
 class OptimizedVer2Mechanism(object):
     def __init__(self, epsilon=_epsilon, delta=_delta,
@@ -486,7 +433,7 @@ class OptimizedVer2Mechanism(object):
         self._epsilon_wc = self._epsilon / self._sample_rate_q
         self._delta_wc = self._delta / self._sample_rate_q
 
-        sp.info('Optimized Noise Mechanism')
+        sp.info('Optimized Normal Mechanism')
         sp.info(sp.var_print('epsilon', self._epsilon) +
                 sp.var_print('delta', self._delta) +
                 sp.var_print('clip', self._clip_value) +

@@ -28,6 +28,18 @@ def generate_noise(grad_array, clip_value, epsilon, delta, noise_iter):
     sigma = tf.ones_like(grad_array)
     sigma = sigma_value * sigma
 
+    '''print("alpha")
+    print(alpha)
+    print("y_bound")
+    print(y_bound)
+    print("alpha1")
+    print(alpha1)
+    print("middle1")
+    print(middle1)
+    print("middle")
+    print(middle)
+    print("sigma_value: ")
+    print(sigma_value)'''
 
     return sigma
 

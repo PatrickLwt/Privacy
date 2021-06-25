@@ -1,5 +1,5 @@
-noise=("Optimized_Special" "Gaussian") #   "Optimized_Normal" "Optimized_Special" "Gaussian"
-epsilon=("0.5" "1.0" "2.0" "5.0" "10.0" ) #"0.2" "0.5" "1.0" "2.0" "5.0" "10.0"
+noise=("AdaClip") #  "AdaClip" "Optimized_Normal" "Optimized_Special" "Gaussian"
+epsilon=("0.4") #"0.1" "0.2" "0.3" "0.4" "0.5" "1.0" "2.0" "5.0" "10.0"
 for ((i=0;i<${#epsilon[@]};++i)); do
     epsilon_val=${epsilon[i]}
     epsilon_str="--epsilon=${epsilon_val}"

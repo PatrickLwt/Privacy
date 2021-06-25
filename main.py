@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import os
 import time
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import noise_gen_wrapper as ngw
 import generate_argparse as ga
 import data_generator as dg 
@@ -18,7 +18,7 @@ PARAMS = {
     # clip value = 0.00001 for mnist clip_inf_norm, clip value = ? for mnist clip_global_norm
     'mnist':{'noise_type': 'Optimized_Normal', 'epsilon': 1.0, 'delta': 0.00001, 'clip_value': 0.1,
             'train_epochs': 60, 'batch_size': 64, 'lot_size': 512, 'total_num_examples': 60000, 'load_model': False,
-            'load_path': 'pretrain_model/pretrained_lenet.h5', 'log_name': 'training.log', 'partial_sens': 1/32,
+            'load_path': 'pretrain_model/pretrained_lenet.h5', 'log_name': 'training.log', 'partial_sens': 1/32, 'gamma': 0.7,
             'net_name': 'LeNet', 'augmentation': False, 'init_lr': 0.1, 'lr_decay_step': 215, 'lr_decay_rate': 0.99},
     'cifar-10':{'noise_type': 'Optimized_Special', 'epsilon': 10.0, 'delta': 0.00001, 'clip_value': 5.0,
             'train_epochs': 60, 'batch_size': 64, 'lot_size': 256, 'total_num_examples': 50000, 'load_model': True,
@@ -54,7 +54,8 @@ net_info = {
     'init_lr': PARAMS[dataset_name]['init_lr'],
     'lr_decay_step': PARAMS[dataset_name]['lr_decay_step'],
     'lr_decay_rate': PARAMS[dataset_name]['lr_decay_rate'],
-    'partial_sens': PARAMS[dataset_name]['partial_sens']
+    'partial_sens': PARAMS[dataset_name]['partial_sens'],
+    'gamma': PARAMS[dataset_name]['gamma']
 }
 
 ga.generate_then_parse_arguments(net_info)
@@ -62,6 +63,45 @@ ga.generate_then_parse_arguments(net_info)
 sp.start_log_file(net_info['log_name'])
 sp.info(str(net_info))
 
+## methods required by adaclip
+def next_ada_clip_bound(beta, norm_bound, gamma):
+    """
+      Args:
+          empirical_fraction(Tensor): empirical fraction of samples with the
+              value at most `target_unclipped_quantile`.
+          norm_bound(Tensor): Clipping bound for the l2 norm of the gradients.
+      Returns:
+          Tensor, undated norm clip .
+    """
+    decay_policy = 'Linear'
+    learning_rate = 0.01
+    target_unclipped_quantile = gamma
+    fraction_stddev = 0.01
+    fraction_noise = tf.random.normal((), mean=0.0, stddev=fraction_stddev)
+
+    empirical_fraction = beta + fraction_noise
+
+    if decay_policy == 'Linear':
+        grad_clip = empirical_fraction - target_unclipped_quantile
+        next_norm_bound = norm_bound - learning_rate * grad_clip
+
+    else:
+        grad_clip = empirical_fraction - target_unclipped_quantile
+        grad_clip = tf.exp(-learning_rate * grad_clip)
+        next_norm_bound = norm_bound * grad_clip
+    # tf.print('beta', beta, 'norm_bound_now', norm_bound, 'norm_bound_next', next_norm_bound)
+    return next_norm_bound
+
+
+def compute_beta(g, l2_norm_clip):
+    grads_flat = tf.nest.flatten(g)
+    squared_l2_norms = [
+        tf.reduce_sum(input_tensor=tf.square(g)) for g in grads_flat
+    ]
+    global_norm = tf.sqrt(tf.add_n(squared_l2_norms))
+    # tf.print('@@global_norm', global_norm, 'l2_norm_clip', l2_norm_clip)
+    return tf.cond(global_norm < l2_norm_clip, lambda: tf.constant(1.0, dtype=tf.float32),
+                   lambda: tf.constant(0.0, dtype=tf.float32))
 
 ### Way to Accelerate using vectorized_map
 # def clip_gradients_vmap(g, l2_norm_clip):
@@ -78,12 +118,13 @@ sp.info(str(net_info))
 class OurModel(globals()[net_info['net_name']]):
     def __init__(self, net_info):
         super(OurModel, self).__init__()
-        self.clip_value = net_info['clip_value']
+        self.clip_value = tf.Variable(net_info['clip_value'], dtype=tf.float32, trainable=False)
         self.batch_size = net_info['batch_size']
         self.batch_per_lot = int(net_info['lot_size'] / net_info['batch_size'])
         self.noise_gen = ngw.define_noiseGen(net_info)
         self.apply_flag = tf.Variable(False, dtype=tf.bool, trainable=False)
         self.sens_flag = tf.Variable(False, dtype=tf.bool, trainable=False)
+        self.sens_tensor = None
 
         if net_info['noise_type'] == 'Optimized_Normal':
             self.do_sens = True
@@ -93,7 +134,11 @@ class OurModel(globals()[net_info['net_name']]):
         else:
             self.do_sens = False
 
-
+        if net_info['noise_type'] == 'AdaClip':
+            self.do_adaclip = True
+            self._gamma = net_info['gamma']
+        else:
+            self.do_adaclip = False
     # def special_compile(self, custom_optimizer, custom_loss, custom_metric):
     #     self.custom_optimizer = custom_optimizer
     #     self.custom_loss = custom_loss
@@ -111,6 +156,7 @@ class OurModel(globals()[net_info['net_name']]):
         return tf.clip_by_global_norm(g, self.clip_value)[0]'''
     ### Liyao's implementation
     def clip_gradients_vmap(self, g, l2_norm_clip):
+
         """Clips gradients in a way that is compatible with vectorized_map."""
         grads_flat = tf.nest.flatten(g)
         squared_l2_norms = [
@@ -123,7 +169,7 @@ class OurModel(globals()[net_info['net_name']]):
 
         return clipped_grads
 
-    ### clip by value
+    ### clip by value, used in l_inf clip
     '''def clip_gradients(self, g):
         grads_flat = tf.nest.flatten(g)
         clipped_flat = [tf.clip_by_value(g, clip_value_min=-self.clip_value, clip_value_max=self.clip_value) for g in grads_flat]
@@ -133,28 +179,18 @@ class OurModel(globals()[net_info['net_name']]):
     def reduce_noise_normalize_batch(self, g):
         summed_gradient = tf.reduce_sum(g, axis=0)
         noise = self.noise_gen.generate_noise(summed_gradient)
+        '''print("1111111 noise is ")
+        print(tf.norm(noise))'''
         noised_gradient = tf.add(summed_gradient, noise)
-        '''print("1111111 noised_gradient is ")
-        print(tf.norm(noised_gradient))'''
+
         return tf.truediv(noised_gradient, self.batch_size)
-
-    '''def reduce_noise_normalize_batch_sens(self, grad, sens):
-        noised_gradient = []
-        for i in range(len(grad)):
-            summed_gradient = tf.reduce_mean(grad[i], axis=0)
-            noise = self.noise_gen.generate_noise(sens[i])
-            noised_grad = tf.add(summed_gradient, noise)
-            noised_gradient.append(noised_grad)
-
-        return noised_gradient'''
 
     ## Liyao's implementation
     def reduce_noise_normalize_batch_sens(self, grad, sens):
-        summed_gradient = tf.reduce_mean(grad, axis=0)
+        summed_gradient = tf.reduce_sum(grad, axis=0)
         noise = self.noise_gen.generate_noise(sens)
         noised_gradient = tf.add(summed_gradient, noise)
-        '''print("2222222 noised_gradient is ")
-        print(tf.norm(noised_gradient))'''
+
         return tf.truediv(noised_gradient, self.batch_size)
 
     def update_sens(self, jacobian, info):
@@ -164,9 +200,10 @@ class OurModel(globals()[net_info['net_name']]):
         # delta_per_iter = delta / (2 * iteration)
 
         def add_optimized_noise(g):
-            clip_value = tf.norm(g)
+            clip_value = tf.minimum(self.clip_value, tf.norm(g))
             noise_on_sens = opt3.generate_noise(g, clip_value, epsilon_w, delta_w, iteration_w)
             noised_sens = tf.add(g, noise_on_sens)
+            # noised_sens = tf.ones_like(g)
             return noised_sens
 
         sens_tensor = tf.nest.map_structure(add_optimized_noise, grads)
@@ -174,6 +211,7 @@ class OurModel(globals()[net_info['net_name']]):
 
     def keep_sens(self, jacobian):
         return [tf.reduce_mean(g, axis=0) for g in jacobian]
+        # return self.sens_tensor
 
     def apply(self):
         gradients = [g / self.batch_per_lot for g in self.accumulated_grads]
@@ -206,28 +244,45 @@ class OurModel(globals()[net_info['net_name']]):
 
         def no():
             return
-        ### Liyao's implementation   Accelerating
+
+        ### Adaclip requires clip_value to adaptively change
+        if self.do_adaclip:
+            # compute clip value adaptively
+            beta_micobatch = tf.vectorized_map(
+                lambda g: compute_beta(g, self.clip_value), jacobian)
+            beta = tf.reduce_mean(beta_micobatch)
+            self.clip_value.assign(next_ada_clip_bound(beta, self.clip_value, self._gamma))
+            net_info['clip_value'] = self.clip_value
+
+            # re-obtain noise generator according to the new clip value
+            self.noise_gen = ngw.define_noiseGen(net_info)
+
+        '''print("net_info['clip_value']:")
+        print(net_info['clip_value'])
+        print("self.clip_value")
+        print(self.clip_value)'''
+
+        ### Obtain the clipped gradients with acceleration
         clipped_gradients = tf.vectorized_map(
             lambda g: self.clip_gradients_vmap(g, self.clip_value), jacobian)
 
-        # clipped_gradients = tf.map_fn(self.clip_gradients, jacobian)
-        # clipped_gradients = tf.vectorized_map(self.clip_gradients, jacobian) # running error
+
+        ### Compute per parameter sensitivity
         if self.do_sens:
             # compute w
             sens_tensor = tf.cond(self.sens_flag, lambda: self.update_sens(jacobian, self.info), lambda: self.keep_sens(jacobian))
-            tf.cond(self.sens_flag, lambda: yes(sens_tensor), lambda: no())
+            tf.cond(self.sens_flag, lambda: yes(sens_tensor), lambda: no()) # assign new sens_tensor only when yes
             noised_gradients = tf.nest.map_structure(self.reduce_noise_normalize_batch_sens, clipped_gradients, self.sens_tensor)
-            # noised_gradients = self.reduce_noise_normalize_batch_sens(clipped_gradients, self.sens_tensor)
         else:
             # do not compute w
             noised_gradients = tf.nest.map_structure(self.reduce_noise_normalize_batch, clipped_gradients)
 
+        ### Accumulate gradients
         for g, new_grad in zip(self.accumulated_grads, noised_gradients):
             g.assign_add(new_grad)
-        
+
+        ### Only update the model after accumulating gradients for the lot
         tf.cond(self.apply_flag, lambda: self.apply(), lambda: self.not_apply())
-        # gradients = tape.gradient(loss, self.trainable_variables)
-        # self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
         self.compiled_metrics.update_state(labels, predictions)
 
         return {m.name: m.result() for m in self.metrics}

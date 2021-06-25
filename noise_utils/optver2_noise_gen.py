@@ -14,7 +14,7 @@ def get_alpha(clip_value, grad_array):
 
 ## update the tau to (2epsilon + ( 2ln(delta) )/t )/ ( iter * (1+t) )
 def get_markov_bound(epsilon, delta, noise_iter):
-    t = (- tf.math.log(delta) + tf.math.sqrt(tf.math.log(delta)*(tf.math.log(delta)-epsilon))) / epsilon
+    t = (4 * tf.math.log(delta) - tf.math.sqrt(16*tf.math.log(delta)*(tf.math.log(delta)-epsilon))) / (-4 * epsilon)
     eps = tf.math.multiply(tf.constant(2.0), epsilon)
     lamd = tf.math.divide(tf.constant(2.0), t)
     lamd2 = tf.math.multiply(tf.add(tf.constant(1.0), t), noise_iter)
@@ -29,11 +29,11 @@ def generate_noise(grad_array, clip_value, epsilon, delta, noise_iter):
     # epsilon = tf.cast(epsilon, tf.float64)
     # delta = tf.cast(delta, tf.float64)
 
-    alpha = get_alpha(clip_value, grad_array)
+    # alpha = get_alpha(clip_value, grad_array)
+    alpha = tf.cast(clip_value, tf.float32)
     y_bound = get_markov_bound(epsilon, delta, noise_iter)
 
     # grad_num = grad_array.get_shape().as_list()[0]
-
     Delta_star = tf.math.divide(tf.math.multiply(alpha, grad_array), tf.norm(grad_array))
 
     ldeno1 = tf.math.multiply(Delta_star, grad_array)
@@ -54,6 +54,17 @@ def generate_noise(grad_array, clip_value, epsilon, delta, noise_iter):
     snume = tf.math.multiply(tf.constant(2.0, dtype=tf.float64), snume1)
     sigma1 = tf.math.divide(snume, sdeno)
     sigma = tf.math.pow(sigma1, tf.constant(1 / 3, dtype=tf.float64))
+
+    '''print("alpha")
+    print(alpha)
+    print("y_bound")
+    print(y_bound)
+    print("Delta_star")
+    print(Delta_star)
+    print("lambda_star")
+    print(lambda_star)
+    print("sigma: ")
+    print(sigma)'''
     # sigma = tf.divide(sigma2, tf.constant(10.0 ** 4, dtype=tf.float64))
     # sigma = tf.cast(sigma, tf.float32)
 
